@@ -19,6 +19,8 @@ public class ImportContext {
     public string fileDirectory;
     public string fileName;
     public string fileNameNoExt;
+    public string charFolder;
+    public string animationName;
     
     public string atlasPath;
     public string animControllerPath;
@@ -87,7 +89,121 @@ public static class ASEImporter {
         public MetaLayerProcessor processor;
     }
 
+    public static void PaImport(DefaultAsset defaultAsset, ImportSettings settings) {
+        var path = AssetDatabase.GetAssetPath(defaultAsset);
+        string filename = Path.GetFileNameWithoutExtension(path);
+        Int32 count = 2;
+        String[] names = filename.Split(new char[] {'_'}, count);
+        var context = new ImportContext {
+            // file = file,
+            settings = settings,
+            fileDirectory = Path.GetDirectoryName(path),
+            fileName = filename,
+            fileNameNoExt = Path.GetFileNameWithoutExtension(path),
+            animationName = names[1],
+            charFolder = names[0],
+        };
+        Directory.CreateDirectory(settings.atlasOutputDirectory + '/' + context.charFolder);
+        try {
+            ImportStage(context, Stage.LoadFile);
+            context.file = ASEParser.PaParse(File.ReadAllBytes(path));        
 
+            if (settings.controllerPolicy == AnimControllerOutputPolicy.CreateOrOverride)
+                context.animControllerPath = settings.animControllerOutputPath + "/" + settings.baseName + ".controller";
+            context.animClipDirectory = settings.clipOutputDirectory;
+
+            // Create paths in advance
+            Directory.CreateDirectory(settings.atlasOutputDirectory);
+            Directory.CreateDirectory(context.animClipDirectory);
+            if (context.animControllerPath != null)
+                Directory.CreateDirectory(Path.GetDirectoryName(context.animControllerPath));
+
+            ImportStage(context, Stage.GenerateAtlas);
+
+            Debug.Log(context.ToString());
+            foreach (var singleLayer in context.file.layers) {
+                    var singlePath = Path.Combine(settings.atlasOutputDirectory + '/' + context.charFolder, context.fileNameNoExt + singleLayer.layerName + ".png");
+                    var sprites = AtlasGenerator.GenerateSingleAtlas(context, 
+                    singleLayer,
+                    singlePath);
+                    GenerateSingleAnimClips(context, "_Sprite", sprites, singleLayer.layerName);
+            }
+
+            ImportStage(context, Stage.GenerateController);
+            GenerateAnimController(context);
+
+        } catch (Exception e) {
+            Debug.LogException(e);
+        }
+
+        ImportEnd(context);
+    }
+
+    public static void GenerateSingleAnimClips(ImportContext ctx, string childPath, List<Sprite> frameSprites, string layerName) {
+        Directory.CreateDirectory(ctx.animClipDirectory);
+        string charFolder = ctx.animClipDirectory + '/' + ctx.charFolder;
+        Directory.CreateDirectory(charFolder); 
+        string clipFolder = charFolder + '/' + layerName;
+        Directory.CreateDirectory(clipFolder); 
+        var fileNamePrefix = clipFolder + '/' +  ctx.animationName; 
+
+        // Generate one animation for the current layer.
+            var clipPath = fileNamePrefix +".anim";
+            AnimationClip clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath);
+
+            // Create clip.
+            if (!clip) {
+                clip = new AnimationClip();
+                AssetDatabase.CreateAsset(clip, clipPath);
+            } else {
+                AnimationUtility.SetAnimationEvents(clip, new AnimationEvent[0]);
+            }
+        
+            // Set loop property
+            //var loop = tag.properties.Contains("loop");
+            var loop = true;
+            var settings = AnimationUtility.GetAnimationClipSettings(clip);
+            if (loop) {
+                clip.wrapMode = WrapMode.Loop;
+                settings.loopBlend = true;
+                settings.loopTime = true;
+            } else {
+                clip.wrapMode = WrapMode.Clamp;
+                settings.loopBlend = false;
+                settings.loopTime = false;
+            }
+            AnimationUtility.SetAnimationClipSettings(clip, settings);
+
+            EditorUtility.SetDirty(clip);
+
+        foreach (var tag in ctx.file.frameTags) {
+            // Generate image.
+            int time = 0;
+            var keyFrames = new ObjectReferenceKeyframe[tag.to - tag.from + 2];
+            for (int i = tag.from; i <= tag.to; ++i) {
+                var aseFrame = ctx.file.frames[i];
+                keyFrames[i - tag.from] = new ObjectReferenceKeyframe {
+                    time = time * 1e-3f,
+                    value = frameSprites[aseFrame.frameID]
+                };
+
+                time += aseFrame.duration;
+            }
+
+            keyFrames[keyFrames.Length - 1] = new ObjectReferenceKeyframe {
+                time = time * 1e-3f - 1.0f / clip.frameRate,
+                value = frameSprites[tag.to]
+            };
+
+            var binding = new EditorCurveBinding {
+                path = childPath,
+                type = typeof(SpriteRenderer),
+                propertyName = "m_Sprite"
+            };
+
+            AnimationUtility.SetObjectReferenceCurve(clip, binding, keyFrames);
+        }
+    }
     public static void Import(DefaultAsset defaultAsset, ImportSettings settings) {
 
         var path = AssetDatabase.GetAssetPath(defaultAsset);

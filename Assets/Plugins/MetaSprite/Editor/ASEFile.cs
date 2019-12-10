@@ -186,6 +186,248 @@ public static class ASEParser {
         CHUNK_PALETTE = 0x2019,
         CHUNK_USERDATA = 0x2020;
 
+    public static ASEFile PaParse(byte[] bytes) {
+        var stream = new MemoryStream(bytes);
+        using (var reader = new BinaryReader(stream)) {
+            var file = new ASEFile();
+
+            reader.ReadDWord(); // File size
+            _CheckMagicNumber(reader.ReadWord(), 0xA5E0);
+
+            var frameCount = reader.ReadWord();
+
+            file.width = reader.ReadWord();
+            file.height = reader.ReadWord();
+
+            var colorDepth = reader.ReadWord(); 
+
+            if (colorDepth != 32) {
+                _Error("Non RGBA color mode isn't supported yet");
+            }
+
+            reader.ReadDWord(); // Flags
+            reader.ReadWord(); // Deprecated speed
+            _CheckMagicNumber(reader.ReadDWord(), 0);
+            _CheckMagicNumber(reader.ReadDWord(), 0);
+
+            reader.ReadBytes(4);
+            reader.ReadWord();
+            reader.ReadBytes(2);
+            reader.ReadBytes(92);
+            int readLayerIndex = 0;
+
+            UserDataAcceptor lastUserdataAcceptor = null;
+
+            var levelToIndex = new Dictionary<int, int>();
+            var enabledLayerIdxs = new List<int>();
+
+            for (int i = 0; i < frameCount; ++i) {
+                var frame = new Frame();
+                frame.frameID = i;
+
+                reader.ReadDWord(); // frameBytes
+                _CheckMagicNumber(reader.ReadWord(), 0xF1FA);
+
+                var chunkCount = reader.ReadWord();
+                
+                frame.duration = reader.ReadWord();
+
+                reader.ReadBytes(6);
+
+                for (int j = 0; j < chunkCount; ++j) {
+                    var chunkBytes = reader.ReadDWord(); // 4
+                    var chunkType = reader.ReadWord(); // 2
+
+                    switch (chunkType) {
+                    case CHUNK_LAYER: {
+                        var layer = new Layer();
+                        var flags = reader.ReadWord();
+
+                        layer.visible = (flags & 0x1) != 0;
+                        
+                        var layerType = reader.ReadWord();
+                        var childLevel = reader.ReadWord(); // childLevel
+                        if (childLevel == 0) {
+                            layer.parentIndex = -1;
+                        } else {
+                            layer.parentIndex = levelToIndex[childLevel - 1];
+                        }
+
+                        reader.ReadWord();
+                        reader.ReadWord();
+
+                        layer.blendMode = (BlendMode) reader.ReadWord();
+                        layer.opacity = reader.ReadByte() / 255.0f;
+                        reader.ReadBytes(3);
+
+                        layer.layerName = reader.ReadUTF8();
+
+                        var thisEnable = layer.visible && !layer.layerName.StartsWith("//");
+                        if (thisEnable) {
+                            if (layerType == 0) {
+                                layer.index = readLayerIndex;
+                                layer.type = LayerType.Content;
+                                file.layers.Add(layer);
+                            }
+                            enabledLayerIdxs.Add(readLayerIndex);
+                        }
+
+                        if (levelToIndex.ContainsKey(childLevel))
+                            levelToIndex[childLevel] = readLayerIndex;
+                        else
+                            levelToIndex.Add(childLevel, readLayerIndex);
+
+                        ++readLayerIndex;
+                        
+                        lastUserdataAcceptor = layer;
+
+                    } break;
+
+                    case CHUNK_CEL: {
+                        var cel = new Cel();
+
+                        cel.layerIndex = reader.ReadWord(); // 2
+                        cel.x = reader.ReadInt16(); // 2
+                        cel.y = reader.ReadInt16(); // 2
+                        cel.opacity = reader.ReadByte() / 255.0f; // 1
+                        cel.type = (CelType) reader.ReadWord(); // 2
+                        reader.ReadBytes(7); // 7
+
+                        switch (cel.type) {
+                            case CelType.Raw: {
+                                cel.width = reader.ReadWord(); // 2
+                                cel.height = reader.ReadWord(); // 2
+                                cel.colorBuffer = ToColorBufferRGBA(reader.ReadBytes(chunkBytes - 6 - 16 - 4)); 
+
+                                _Assert(cel.width * cel.height == cel.colorBuffer.Length, "Color buffer size incorrect");
+                            } break;
+                            case CelType.Linked: {
+                                cel.linkedCel = reader.ReadWord();
+                            } break;
+                            case CelType.Compressed: {
+                                cel.width = reader.ReadWord();
+                                cel.height = reader.ReadWord();
+                                cel.colorBuffer = ToColorBufferRGBA(
+                                    reader.ReadCompressedBytes(chunkBytes - 6 - 16 - 4));
+                                _Assert(cel.width * cel.height == cel.colorBuffer.Length, "Color buffer size incorrect");                                
+                            } break;
+                        }
+
+                        if (file.FindLayer(cel.layerIndex) != null)
+                            frame.cels.Add(cel.layerIndex, cel);
+
+                        lastUserdataAcceptor = cel;
+
+                    } break;
+
+                    case CHUNK_FRAME_TAGS: {
+                        var count = reader.ReadWord();
+                        reader.ReadBytes(8);
+
+                        for (int c = 0; c < count; ++c) {
+                            var frameTag = new FrameTag();
+
+                            frameTag.from = reader.ReadWord();
+                            frameTag.to = reader.ReadWord();
+                            reader.ReadByte();
+                            reader.ReadBytes(8);
+                            reader.ReadBytes(3);
+                            reader.ReadByte();
+
+                            frameTag.name = reader.ReadUTF8();
+
+                            if (frameTag.name.StartsWith("//")) { // Commented tags are ignored
+                                continue;
+                            }
+
+                            var originalName = frameTag.name;
+
+                            var tagIdx = frameTag.name.IndexOf('#');
+                            var nameInvalid = false;
+                            if (tagIdx != -1) {
+                                frameTag.name = frameTag.name.Substring(0, tagIdx).Trim();
+                                var possibleProperties = originalName.Substring(tagIdx).Split(' ');
+                                foreach (var possibleProperty in possibleProperties) {
+                                    if (possibleProperty.Length > 1 && possibleProperty[0] == '#') {
+                                        frameTag.properties.Add(possibleProperty.Substring(1));
+                                    } else {
+                                        nameInvalid = true;
+                                    }
+                                }
+                            }
+
+                            if (nameInvalid) {
+                                Debug.LogWarning("Invalid name: " + originalName);
+                            }
+
+                            file.frameTags.Add(frameTag);
+                        }
+
+                    } break;
+
+                    case CHUNK_USERDATA: {
+                        var flags = reader.ReadDWord();
+                        var hasText = (flags & 0x01) != 0;
+                        var hasColor = (flags & 0x02) != 0;
+
+                        if (hasText) {
+                            lastUserdataAcceptor.userData = reader.ReadUTF8();
+                        }
+
+                        if (hasColor) {
+                            reader.ReadBytes(4);
+                        }
+
+                    } break;
+
+                    default: {
+                        reader.ReadBytes(chunkBytes - 6);
+                    } break;
+
+                    }
+                }
+
+                file.frames.Add(frame);
+            }
+
+            // Post process: calculate pixel alpha
+            for (int f = 0; f < file.frames.Count; ++f) {
+                var frame = file.frames[f];
+                foreach (var cel in frame.cels.Values) {
+                    if (cel.type != CelType.Linked) {
+                        for(int i = 0; i < cel.colorBuffer.Length; ++i) {
+                            cel.colorBuffer[i].a *= cel.opacity * file.FindLayer(cel.layerIndex).opacity;
+                        }
+                    }
+                }
+            }
+
+            // Post process: eliminate reference cels
+            for (int f = 0; f < file.frames.Count; ++f) {
+                var frame = file.frames[f];
+                foreach (var pair in frame.cels) {
+                    var layerID = pair.Key;
+                    var cel = pair.Value;
+                    if (cel.type == CelType.Linked) {
+                        cel.type = CelType.Raw;
+
+                        var src = file.frames[cel.linkedCel].cels[layerID];
+
+                        cel.x = src.x;
+                        cel.y = src.y;
+                        cel.width = src.width;
+                        cel.height = src.height;
+                        cel.colorBuffer = src.colorBuffer;
+                        cel.opacity = src.opacity;
+                        cel.userData = src.userData;
+                    }
+                }
+            }
+
+            return file;
+        }
+    }
+
     public static ASEFile Parse(byte[] bytes) {
         var stream = new MemoryStream(bytes);
         using (var reader = new BinaryReader(stream)) {
@@ -264,7 +506,7 @@ public static class ASEParser {
 
                         var parentEnable = layer.parentIndex == -1 || enabledLayerIdxs.Contains(layer.parentIndex);
                         var thisEnable = layer.visible && !layer.layerName.StartsWith("//");
-                        if (parentEnable && thisEnable) {
+                        if (thisEnable) {
                             if (layerType == 0) {
                                 layer.index = readLayerIndex;
                                 layer.type = layer.layerName.StartsWith("@") ? LayerType.Meta : LayerType.Content;
