@@ -17,13 +17,13 @@ namespace MetaSprite {
 public static class ImportMenu {
 
     [MenuItem("Assets/Aseprite/Custom Import", priority = 60)]
-    static void MenuClicked() {
+    static void CustomImport() {
         ASEImporter.Refresh();
         DoImport(GetSelectedAseprites(), true);
     }
 
     [MenuItem("Assets/Aseprite/Custom Import", true)]
-    static bool ValidateMenu() {
+    static bool ValidateCustomImport() {
         return GetSelectedAseprites().Count() > 0;
     }
 
