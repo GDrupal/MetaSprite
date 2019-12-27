@@ -117,12 +117,28 @@ public static class ASEImporter {
             ImportStage(context, Stage.GenerateAtlas);
 
             foreach (var singleLayer in context.file.layers) {
-                    var singlePath = Path.Combine(settings.atlasOutputDirectory + '/' + context.charFolder, context.fileNameNoExt + singleLayer.layerName + ".png");
+                    string lName = singleLayer.layerName;
+                    string elementName = "";
+
+                    if (settings.baseName.Length > 0) {
+                        // Only base layer is missing prefix.
+                        if (lName != settings.baseName) {
+                            string[] lnParts = lName.Split('_');
+                            elementName = '/' + lnParts[0] + '/';
+                            singleLayer.layerName = lnParts[1];
+                        }
+                    }
+
+                    var spriteFolder = settings.atlasOutputDirectory + '/' + context.charFolder + elementName;
+                    Directory.CreateDirectory(spriteFolder);
+
+                    var singlePath = Path.Combine(spriteFolder, singleLayer.layerName + ".png");
                     var sprites = AtlasGenerator.GenerateSingleAtlas(context, 
                     singleLayer,
                     singlePath);
                     foreach (var tag in context.file.frameTags) {
-                        GenerateSingleAnimClips(context, "_Sprite", sprites, singleLayer.layerName, tag);
+                        var subFolder = elementName + singleLayer.layerName;
+                        GenerateSingleAnimClips(context, "_Sprite", sprites, subFolder, tag);
                     }
             }
 
@@ -136,11 +152,11 @@ public static class ASEImporter {
         ImportEnd(context);
     }
 
-    public static void GenerateSingleAnimClips(ImportContext ctx, string childPath, List<Sprite> frameSprites, string layerName, FrameTag tag) {
+    public static void GenerateSingleAnimClips(ImportContext ctx, string childPath, List<Sprite> frameSprites, string subFolder, FrameTag tag) {
         Directory.CreateDirectory(ctx.animClipDirectory);
         string charFolder = ctx.animClipDirectory + '/' + ctx.charFolder;
         Directory.CreateDirectory(charFolder); 
-        string clipFolder = charFolder + '/' + layerName;
+        string clipFolder = charFolder + '/' + subFolder;
         Directory.CreateDirectory(clipFolder); 
         var fileNamePrefix = clipFolder + '/' +  tag.name; 
 
@@ -157,8 +173,7 @@ public static class ASEImporter {
             }
         
             // Set loop property
-            //var loop = tag.properties.Contains("loop");
-            var loop = true;
+            var loop = tag.properties.Contains("loop");
             var settings = AnimationUtility.GetAnimationClipSettings(clip);
             if (loop) {
                 clip.wrapMode = WrapMode.Loop;
