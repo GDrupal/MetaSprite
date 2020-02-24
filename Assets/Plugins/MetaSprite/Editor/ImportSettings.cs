@@ -15,8 +15,15 @@ public enum AnimControllerOutputPolicy {
     Skip, CreateOrOverride
 }
 
+public enum IMPORTTYPE {
+    ASEImporter = 1,
+    ANARKADEImporter = 2,
+}
+
 [CreateAssetMenu(menuName = "ASE Import Settings")]
 public class ImportSettings : ScriptableObject {
+
+    public IMPORTTYPE importType;
 
     public int ppu = 48;
 
@@ -58,7 +65,8 @@ public class ImportSettingsEditor : Editor {
         using (new GL.HorizontalScope(EditorStyles.toolbar)) {
             GL.Label("Options");
         }
-
+        settings.importType = (IMPORTTYPE) EGL.EnumPopup("Import Type", settings.importType);
+        EGL.Space();
         settings.baseName = EGL.TextField("Base Name", settings.baseName);
         settings.spriteTarget = EGL.TextField("Target Child Object", settings.spriteTarget);
         EGL.Space();

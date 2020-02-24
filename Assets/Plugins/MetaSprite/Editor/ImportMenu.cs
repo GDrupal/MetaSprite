@@ -16,17 +16,6 @@ namespace MetaSprite {
 
 public static class ImportMenu {
 
-    [MenuItem("Assets/Aseprite/Custom Import", priority = 60)]
-    static void CustomImport() {
-        ASEImporter.Refresh();
-        DoImport(GetSelectedAseprites(), true);
-    }
-
-    [MenuItem("Assets/Aseprite/Custom Import", true)]
-    static bool ValidateCustomImport() {
-        return GetSelectedAseprites().Count() > 0;
-    }
-
     [MenuItem("Assets/Aseprite/Import", priority = 60)]
     static void MenuClicked() {
         ASEImporter.Refresh();
@@ -100,12 +89,12 @@ public static class ImportMenu {
         return path;
     }
 
-    static void DoImport(DefaultAsset[] assets, bool custom = false) {
+    static void DoImport(DefaultAsset[] assets) {
         foreach (var asset in assets) {
             var settingsPath = GetImportSettingsPath(asset);
             var reference = (ImportSettingsReference) AssetDatabase.LoadAssetAtPath(settingsPath, typeof(ImportSettingsReference));
             if (!reference) {
-                CreateSettingsThenImport(assets, custom);
+                CreateSettingsThenImport(assets);
                 return;
             }
         }
@@ -114,7 +103,7 @@ public static class ImportMenu {
             var settingsPath = GetImportSettingsPath(asset);
             var reference = (ImportSettingsReference) AssetDatabase.LoadAssetAtPath(settingsPath, typeof(ImportSettingsReference));
             if (reference.settings)
-                if (custom) {
+                if (reference.settings.importType == IMPORTTYPE.ANARKADEImporter) {
                     ASEImporter.PaImport(asset, reference.settings);
                 }
                 else {
@@ -134,7 +123,7 @@ public static class ImportMenu {
                         .ToArray();
     }
 
-    static void CreateSettingsThenImport(DefaultAsset[] assets, bool custom = false) {
+    static void CreateSettingsThenImport(DefaultAsset[] assets) {
         var size = new Vector2(Screen.width, Screen.height);
         var rect = new Rect(size.x / 2, size.y / 2, 250, 200);
         var window = (CreateSettingsWindow) EditorWindow.CreateInstance(typeof(CreateSettingsWindow));
@@ -143,7 +132,7 @@ public static class ImportMenu {
         var paths = assets.Select(it => GetImportSettingsPath(it)).ToList();
 
         window._Init(paths, settings => { foreach (var asset in assets) {
-            if (custom) {
+            if (settings.importType == IMPORTTYPE.ANARKADEImporter) {
                 ASEImporter.PaImport(asset, settings);
             }
             else {
